@@ -1,3 +1,5 @@
+from typing import List
+
 from pydantic import BaseModel
 
 
@@ -9,3 +11,5 @@ class AudioChunkMessage(BaseModel):
     channelId: str
     videoId: str
     audioChunk: str
+    tags: List[str] = []
+    category: str

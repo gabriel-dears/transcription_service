@@ -1,15 +1,72 @@
-import pika
 import asyncio
+import base64
+import io
+import json
+import logging
 import os
-from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
+from datetime import datetime
+
+import pika
+import psycopg2
+from fastapi import FastAPI, HTTPException
+
 from models import AudioFile, AudioChunkMessage
 from transcription import load_audio, transcribe_audio_file
 from utils import check_file_exists
-import logging
-import json
-import base64
-import io
+
+# Database connection parameters
+DB_HOST = "transcription_service_db_postgres"
+DB_NAME = "transcription_service_db"
+DB_USER = "postgres"
+DB_PASSWORD = "postgres"
+
+
+# Establish a connection to the database
+def get_db_connection():
+    conn = psycopg2.connect(
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST
+    )
+    return conn
+
+
+# Function to insert transcription into the database
+def insert_transcription(channel_id, video_id, part, transcription, tags, category):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # SQL query to insert the transcription record
+        insert_query = """
+        INSERT INTO transcriptions (channel_id, video_id, part, transcription, tags, category, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """
+
+        # Prepare the data for insertion
+        current_time = datetime.now()
+        tags_array = tags  # Assuming 'tags' is a list or array
+        data = (channel_id, video_id, part, transcription, tags_array, category, current_time, current_time)
+
+        # Execute the query
+        cursor.execute(insert_query, data)
+
+        # Commit the transaction
+        conn.commit()
+
+        # Close the cursor and connection
+        cursor.close()
+        conn.close()
+
+        print(f"Transcription for video {video_id} part {part} inserted successfully.")
+
+    except Exception as e:
+        print(f"Error inserting transcription: {e}")
+        if conn:
+            conn.rollback()
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -74,14 +131,71 @@ def process_and_transcribe_audio(audio_chunk_message: AudioChunkMessage):
         audio = load_audio(audio_file_obj)
         transcript = transcribe_audio_file(audio)
 
+        processed_message = {
+            "channelId": audio_chunk_message.channelId,
+            "videoId": audio_chunk_message.videoId,
+            "transcription": transcript,
+            "tags": audio_chunk_message.tags,
+            "category": audio_chunk_message.category,
+        }
+
+        # Store transcribed content
+        # TODO: get "part" from audio_generator_service
+        insert_transcription(audio_chunk_message.channelId, audio_chunk_message.videoId, 1, processed_message,
+                             audio_chunk_message.tags, audio_chunk_message.category)
+
+        # Send the message to the next queue
+        send_to_queue("transcription_queue", processed_message)
+
         # Log the transcript
-        logger.info(f"Transcription completed for {audio_chunk_message.channelId}_{audio_chunk_message.videoId}.")
-        logger.info(f"Transcript: {transcript}")
+        # logger.info(f"Transcription completed for {audio_chunk_message.channelId}_{audio_chunk_message.videoId}.")
+        # logger.info(f"Transcript: {transcript}")
 
         # You can return or send the transcript to another queue if needed
         return transcript
     except Exception as e:
-        logger.error(f"Failed to transcribe audio chunk for {audio_chunk_message.channelId}_{audio_chunk_message.videoId}: {e}")
+        logger.error(
+            f"Failed to transcribe audio chunk for {audio_chunk_message.channelId}_{audio_chunk_message.videoId}: {e}")
+
+
+def send_to_queue(queue_name: str, message: dict):
+    try:
+        # Establish RabbitMQ connection
+        connection = get_rabbitmq_connection()
+        channel = connection.channel()
+
+        # Declare the exchange
+        exchange_name = "transcription_exchange"
+        channel.exchange_declare(
+            exchange=exchange_name,
+            exchange_type="direct",  # Use the appropriate type (e.g., direct, fanout, topic)
+            durable=True  # Make it persistent
+        )
+
+        # Declare the queue
+        channel.queue_declare(queue=queue_name, durable=True)
+
+        # Bind the queue to the exchange
+        channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=queue_name)
+
+        # Publish the message to the exchange
+        channel.basic_publish(
+            exchange=exchange_name,
+            routing_key=queue_name,
+            body=json.dumps(message),
+            properties=pika.BasicProperties(
+                delivery_mode=2,  # Make message persistent
+            ),
+        )
+
+        logger.info(f"Message sent to queue '{queue_name}': {message}")
+
+        # Close the connection
+        connection.close()
+    except Exception as e:
+        logger.error(f"Failed to send message to queue '{queue_name}': {e}")
+        raise e
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
