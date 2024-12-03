@@ -15,6 +15,17 @@ from models import AudioFile, AudioChunkMessage
 from transcription import load_audio, transcribe_audio_file
 from utils import check_file_exists
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# RabbitMQ connection settings
+RABBITMQ_HOST = os.getenv('SPRING_RABBITMQ_HOST')
+RABBITMQ_PORT = os.getenv('SPRING_RABBITMQ_PORT')
+RABBITMQ_USERNAME = os.getenv('SPRING_RABBITMQ_USERNAME')
+RABBITMQ_PASSWORD = os.getenv('SPRING_RABBITMQ_PASSWORD')
+QUEUE_NAME = "audio_queue"
+
 # Database connection parameters
 DB_HOST = "transcription_service_db_postgres"
 DB_NAME = "transcription_service_db"
@@ -39,6 +50,9 @@ def insert_transcription(channel_id, video_id, part, transcription, tags, catego
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        logger.info(
+            f"Before inserting transcription. Details: channelId={channel_id}, videoId={video_id}, part={part}, transcription={transcription}, tags={tags}, category={category}")
+
         # SQL query to insert the transcription record
         insert_query = """
         INSERT INTO transcriptions (channel_id, video_id, part, transcription, tags, category, created_at, updated_at)
@@ -60,24 +74,15 @@ def insert_transcription(channel_id, video_id, part, transcription, tags, catego
         cursor.close()
         conn.close()
 
+        logger.info(
+            f"After inserting transcription. Details: channelId={channel_id}, videoId={video_id}, part={part}, transcription={transcription}, tags={tags}, category={category}")
+
         print(f"Transcription for video {video_id} part {part} inserted successfully.")
 
     except Exception as e:
         print(f"Error inserting transcription: {e}")
         if conn:
             conn.rollback()
-
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# RabbitMQ connection settings
-RABBITMQ_HOST = os.getenv('SPRING_RABBITMQ_HOST')
-RABBITMQ_PORT = os.getenv('SPRING_RABBITMQ_PORT')
-RABBITMQ_USERNAME = os.getenv('SPRING_RABBITMQ_USERNAME')
-RABBITMQ_PASSWORD = os.getenv('SPRING_RABBITMQ_PASSWORD')
-QUEUE_NAME = "audio_queue"
 
 
 def get_rabbitmq_connection():
@@ -182,7 +187,7 @@ def send_to_queue(queue_name: str, message: dict):
         channel.basic_publish(
             exchange=exchange_name,
             routing_key=queue_name,
-            body=json.dumps(message),
+            body=json.dumps(message, ensure_ascii=False).encode("utf-8"),  # Use UTF-8 encoding
             properties=pika.BasicProperties(
                 delivery_mode=2,  # Make message persistent
             ),
