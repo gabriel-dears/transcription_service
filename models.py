@@ -13,3 +13,4 @@ class AudioChunkMessage(BaseModel):
     audioChunk: str
     tags: List[str] = []
     category: str
+    audioPart: str

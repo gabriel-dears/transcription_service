@@ -142,6 +142,7 @@ def process_and_transcribe_audio(audio_chunk_message: AudioChunkMessage):
             "transcription": transcript,
             "tags": audio_chunk_message.tags,
             "category": audio_chunk_message.category,
+            "audioPart": audio_chunk_message.audioPart
         }
 
         # Store transcribed content
