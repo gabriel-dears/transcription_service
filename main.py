@@ -79,6 +79,9 @@ def insert_transcription(channel_id, video_id, part, transcription, tags, catego
 
         print(f"Transcription for video {video_id} part {part} inserted successfully.")
 
+    except psycopg2.Error as sql_error:
+        logger.error(f"SQL Error: {sql_error.pgcode} - {sql_error.pgerror}")
+        raise
     except Exception as e:
         print(f"Error inserting transcription: {e}")
         if conn:
@@ -147,7 +150,7 @@ def process_and_transcribe_audio(audio_chunk_message: AudioChunkMessage):
 
         # Store transcribed content
         # TODO: get "part" from audio_generator_service
-        insert_transcription(audio_chunk_message.channelId, audio_chunk_message.videoId, 1, processed_message,
+        insert_transcription(audio_chunk_message.channelId, audio_chunk_message.videoId, audio_chunk_message.audioPart, transcript,
                              audio_chunk_message.tags, audio_chunk_message.category)
 
         # Send the message to the next queue
