@@ -126,6 +126,43 @@ async def consume_messages():
     await asyncio.get_event_loop().run_in_executor(None, channel.start_consuming)
     connection.close()
 
+def ensure_transcriptions_table():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Check if table exists
+        cursor.execute("""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' AND table_name = 'transcriptions'
+        );
+        """)
+        exists = cursor.fetchone()[0]
+        if not exists:
+            # Create table if not exists
+            cursor.execute("""
+            CREATE TABLE transcriptions (
+                id SERIAL PRIMARY KEY,
+                channel_id VARCHAR(255) NOT NULL,
+                video_id VARCHAR(255) NOT NULL,
+                part INTEGER NOT NULL,
+                transcription TEXT NOT NULL,
+                tags TEXT[],
+                category VARCHAR(100),
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );
+            """)
+            conn.commit()
+            logger.info("Transcriptions table created successfully.")
+        else:
+            logger.info("Transcriptions table already exists.")
+        cursor.close()
+        conn.close()
+    except psycopg2.Error as e:
+        logger.error(f"Database initialization failed: {e.pgerror}")
+        raise
+
 
 def process_and_transcribe_audio(audio_chunk_message: AudioChunkMessage):
     try:
@@ -208,15 +245,17 @@ def send_to_queue(queue_name: str, message: dict):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Setup: Start the RabbitMQ consumer in a background task when the app starts
+    # Setup
+    ensure_transcriptions_table()  # Ensure table exists
     consumer_task = asyncio.create_task(consume_messages())
     yield
-    # Cleanup: Stop the consumer task when the app shuts down
+    # Cleanup
     consumer_task.cancel()
     try:
         await consumer_task
     except asyncio.CancelledError:
         pass
+
 
 
 app = FastAPI(lifespan=lifespan)
